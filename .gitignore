@@ -1,9 +1,0 @@
-node_modules/
-.env
-.env.local
-.DS_Store
-# 旧模型，前端已改用 xiaoye-new.glb，不需要上传
-public/xiaoye.glb
-
-# 大模型单独上传（git 推送不稳定）
-public/xiaoye-new.glb
