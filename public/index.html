@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小叶 · 3D 植物百科语音助手</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+         background:#f5f6f7; color:#1f2328; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+  header { padding:12px 20px; background:#fff; border-bottom:1px solid #e6e8eb; display:flex;
+           align-items:center; justify-content:space-between; flex:0 0 auto; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  .status { font-size:12px; color:#6b7280; }
+  #app { flex:1; display:flex; min-height:0; }
+  #left { flex:1 1 60%; position:relative; background:linear-gradient(180deg,#fff,#eef1f4); }
+  #right { flex:0 0 400px; display:flex; flex-direction:column; background:#fff; border-left:1px solid #e6e8eb; }
+  canvas { display:block; width:100%; height:100%; }
+  #loading, #errbox { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+                      text-align:center; font-size:13px; color:#6b7280; pointer-events:none; }
+  #errbox { display:none; color:#9b1c1c; background:#fff4f4; border:1px solid #f0b4b4;
+            padding:12px 18px; border-radius:8px; pointer-events:auto; max-width:80%; }
+  #chat { flex:1; overflow-y:auto; padding:16px; }
+  .msg { margin-bottom:14px; line-height:1.7; font-size:14px; }
+  .msg .who { font-size:11px; color:#9ca3af; margin-bottom:4px; }
+  .msg.user { text-align:right; }
+  .msg.user .bubble { background:#0f6e56; color:#fff; border-radius:10px 10px 2px 10px; }
+  .msg.bot .bubble { background:#f3f4f6; color:#1f2328; border-radius:10px 10px 10px 2px; }
+  .bubble { display:inline-block; padding:9px 12px; max-width:92%; text-align:left;
+            white-space:pre-wrap; word-break:break-word; }
+  .tip { font-size:12px; color:#9ca3af; text-align:center; margin:8px 0; }
+  .ctrl { border-top:1px solid #e6e8eb; padding:10px 12px; }
+  .textrow { display:flex; gap:8px; }
+  #q { flex:1; padding:9px 11px; border:1px solid #d0d7de; border-radius:8px; font-size:14px;
+       font-family:inherit; resize:none; }
+  #q:focus { outline:none; border-color:#0f6e56; }
+  button { border:none; border-radius:8px; background:#0f6e56; color:#fff; font-size:14px;
+           cursor:pointer; font-family:inherit; }
+  button:hover { background:#0b5745; }
+  button.ghost { background:#fff; color:#374151; border:1px solid #d0d7de; }
+  #sendBtn { padding:0 14px; }
+  #micBtn { width:100%; padding:12px; margin-top:8px; font-size:15px; position:relative; overflow:hidden;
+            background:#0f6e56; transition:background .2s, transform .1s; user-select:none; -webkit-user-select:none; }
+  #micBtn.listening { background:#dc2626; }
+  #micBtn.listening::after { content:""; position:absolute; inset:0; border-radius:8px;
+            border:2px solid #dc2626; animation:ripple 1.2s ease-out infinite; }
+  @keyframes ripple { 0%{transform:scale(1);opacity:.8} 100%{transform:scale(1.15);opacity:0} }
+  .bar { padding:6px 12px; border-top:1px solid #e6e8eb; display:flex; gap:8px; align-items:center; }
+  .bar label { font-size:12px; color:#6b7280; margin-left:auto; }
+  #heard { font-size:12px; color:#0f6e56; min-height:16px; text-align:center; margin-top:6px; }
+  #soundGate { position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+               background:rgba(255,255,255,.85); z-index:10; }
+  #soundGate button { padding:12px 24px; font-size:15px; }
+  #bubble3d { position:absolute; display:none; transform:translate(-50%,-100%); z-index:5;
+              background:#fff; color:#1f2328; padding:8px 12px; border-radius:10px; font-size:13px;
+              max-width:220px; text-align:center; box-shadow:0 3px 12px rgba(0,0,0,.15);
+              pointer-events:none; white-space:normal; }
+  #bubble3d::after { content:""; position:absolute; bottom:-6px; left:50%; transform:translateX(-50%);
+                     border:6px solid transparent; border-top-color:#fff; border-bottom:0; }
+  @media (max-width:800px){ #app{flex-direction:column;} #left{flex:1 1 45%;} #right{flex:1 1 55%;border-left:none;border-top:1px solid #e6e8eb;} }
+</style>
+<script type="importmap">
+{ "imports": { "three":"/vendor/three/three.module.js", "three/addons/":"/vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<header>
+  <h1>🌿 小叶 · 3D 植物百科</h1>
+  <div class="status" id="status">正在载入模型…</div>
+</header>
+<div id="app">
+  <div id="left">
+    <canvas id="cv"></canvas>
+    <div id="loading">正在载入 3D 模型…</div>
+    <div id="errbox"></div>
+    <div id="soundGate"><button id="gateBtn">🔊 点击开启声音</button></div>
+    <div id="bubble3d"></div>
+  </div>
+  <div id="right">
+    <div id="chat"><div class="tip">按住下方按钮说话，或直接输入文字问我植物问题</div></div>
+    <div class="bar">
+      <button class="ghost" id="stopBtn" disabled>停止朗读</button>
+      <label><input type="checkbox" id="voiceOn" checked> 语音朗读</label>
+      <label><input type="checkbox" id="wakeOn" checked> 免提唤醒</label>
+    </div>
+    <div class="ctrl">
+      <button id="micBtn">👂 点击开启语音唤醒</button>
+      <div id="heard"></div>
+      <div class="textrow" style="margin-top:6px">
+        <textarea id="q" rows="1" placeholder="或输入文字…"></textarea>
+        <button id="sendBtn">发送</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+/* ================= 可配置项 ================= */
+const CONFIG = {
+  modelUrl: '/xiaoye-new.glb',    // 3D 模型地址（带骨骼+口型的新模型）
+  visemes: ['aa','ih','ou','ee','oh'], // 口型顺序（对应 GLB 的 morph target）
+  saluteClipName: 'human_000052', // 敬礼动画名（用户从预览页确认：动作3 = 52 那个）
+  saluteDur: 3.0,                 // 敬礼播放时长（该动画全长约 2.8 秒）
+  idleWait: 10,                   // 无提问多少秒后，播一次拉伸动作
+  idleClipName: 'human_000000',   // 固定播这段拉伸动作（用户指定）
+  idleClipDur: 5.0,               // 播放时长（该动画全长8.9s，取前5s动作精华）
+  filler: '好，我想想哦～',         // 提问瞬间先说的应声词（提前合成并缓存，零等待）
+  welcome: '你好呀，我是小叶，你的植物百科小助手！有什么植物问题想问我吗？',
+  greetings: [                    // 点击角色时随机说一句
+    '嗨！你点到我啦，有什么植物想问的吗？',
+    '你好呀，我是小叶，很高兴见到你！',
+    '嘿嘿，别挠我呀～ 我是植物百科小助手哦',
+    '你好！想认识哪种植物？尽管问我吧',
+    '又见面啦！今天想了解什么植物呢？'
+  ],
+  lang: 'zh-CN',                  // 语音识别语言
+  wakeWords: ['你好','小叶','哈喽','hi'], // 唤醒词（免提模式下说到就唤起）
+  wakeReply: '我在呀，你说～',     // 唤醒后的回应
+  activeTimeout: 8000             // 对话中多久没说话就退回待唤醒(毫秒)
+};
+/* ========================================== */
+
+const $ = id => document.getElementById(id);
+const statusEl=$('status'), loadingEl=$('loading'), errBox=$('errbox'), chatEl=$('chat');
+const qEl=$('q'), sendBtn=$('sendBtn'), stopBtn=$('stopBtn'), voiceOn=$('voiceOn');
+const micBtn=$('micBtn'), heardEl=$('heard'), soundGate=$('soundGate');
+
+/* ---------- Three.js 场景 ---------- */
+const renderer = new THREE.WebGLRenderer({ canvas:$('cv'), antialias:true, alpha:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40,1,0.1,1000);
+camera.position.set(0,0.2,4.2);
+const controls = new OrbitControls(camera, $('cv'));
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.minDistance=1.5; controls.maxDistance=12;
+scene.add(new THREE.AmbientLight(0xffffff,1.6));
+const key=new THREE.DirectionalLight(0xffffff,2.2); key.position.set(3,5,4); scene.add(key);
+const fill=new THREE.DirectionalLight(0xffffff,1.0); fill.position.set(-3,2,-4); scene.add(fill);
+function resize(){
+  const w=$('left').clientWidth, h=$('left').clientHeight;
+  renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+addEventListener('resize',resize); resize();
+const avatarGroup = new THREE.Group(); scene.add(avatarGroup);
+
+/* ---------- 口型 morph ---------- */
+let morphMeshes=[], morphIndex={}, visemePos=0, mouthTarget=0;
+function collectMorphs(root){
+  morphMeshes=[];
+  root.traverse(o=>{
+    if(o.isMesh && o.morphTargetInfluences && o.morphTargetInfluences.length){
+      morphMeshes.push(o);
+      const dict=o.morphTargetDictionary||{};
+      CONFIG.visemes.forEach((name,i)=>{ if(morphIndex[name]===undefined) morphIndex[name]=dict[name]!==undefined?dict[name]:i; });
+    }
+  });
+  return Object.keys(morphIndex).length;
+}
+function applyMorphs(amount){
+  if(!morphMeshes.length) return;
+  const idx=morphIndex[CONFIG.visemes[visemePos%CONFIG.visemes.length]];
+  for(const m of morphMeshes){
+    const inf=m.morphTargetInfluences;
+    for(let i=0;i<inf.length;i++) inf[i]=0;
+    if(idx!==undefined && inf[idx]!==undefined) inf[idx]=Math.max(0,Math.min(1,amount));
+  }
+}
+
+let welcomeDone=false, pendingWelcome=null, userActed=false;
+let mixer=null, clips=[], saluteAction=null, saluteIdx=-1;
+let idleAction=null;                     // 固定的拉伸动作
+let restPose=null;                       // 静止姿态快照
+let curAction=null, curTimer=0;          // 当前播放的单次动作及其剩余时长
+let idleElapsed=0;                       // 距上次交互的时间（秒），用于触发发呆
+const loader=new GLTFLoader();
+loader.load(CONFIG.modelUrl, gltf=>{
+  const model=gltf.scene;
+  const box=new THREE.Box3().setFromObject(model);
+  const maxDim=Math.max(...box.getSize(new THREE.Vector3()).toArray());
+  model.scale.setScalar(2.6/maxDim);
+  const c=new THREE.Box3().setFromObject(model).getCenter(new THREE.Vector3());
+  model.position.sub(c);
+  avatarGroup.add(model);
+  const n=collectMorphs(model);
+
+  // 骨骼动画：默认不播放（静止站姿 + 呼吸），敬礼/发呆才单次播放
+  clips=gltf.animations||[];
+  if(clips.length){
+    mixer=new THREE.AnimationMixer(model);
+    // 按名字精确定位敬礼动画
+    saluteIdx=clips.findIndex(c=>c.name===CONFIG.saluteClipName);
+    if(saluteIdx<0) saluteIdx=clips.findIndex(c=>/000052/.test(c.name)); // 兜底：名字含 52
+    if(saluteIdx>=0){
+      saluteAction=mixer.clipAction(clips[saluteIdx]);
+      saluteAction.setLoop(THREE.LoopOnce,1);
+      saluteAction.clampWhenFinished=true;
+    }
+    // 固定的拉伸动作
+    const idleIdx=clips.findIndex(c=>c.name===CONFIG.idleClipName);
+    if(idleIdx>=0){
+      idleAction=mixer.clipAction(clips[idleIdx]);
+      idleAction.setLoop(THREE.LoopOnce,1);
+      idleAction.clampWhenFinished=true;
+    }
+  }
+  // 保存静止姿态（绑定姿态）的各骨骼初始四元数，动作结束后恢复
+  restPose=new Map();
+  model.traverse(o=>{ if(o.isBone) restPose.set(o, o.quaternion.clone()); });
+
+  loadingEl.style.display='none';
+  statusEl.textContent='模型已就绪 · 口型×'+n+' · 动作×'+clips.length+' · 拖动旋转/滚轮缩放';
+  playWelcome();
+}, e=>{
+  if(e.total) loadingEl.textContent='载入模型… '+Math.round(e.loaded/e.total*100)+'%';
+}, err=>{
+  loadingEl.style.display='none';
+  errBox.style.display='block';
+  errBox.textContent='模型加载失败：'+(err?.message||'未知错误');
+});
+
+/* ---------- 音频播放 + 音量驱动口型（支持逐句排队） ---------- */
+let audioCtx=null, analyser=null, freqData=null, currentAudio=null;
+let speaking=false, clock=0, visemeTimer=0, audioUnlocked=false;
+let speakSeq=0;        // 朗读序号：新提问/点停止后自增，作废旧合成
+let askSeq=0;          // 提问序号：新提问会中止上一轮流式回答
+let ttsQueue=[];       // 待朗读的句子队列
+let ttsRunning=false;  // 队列是否正在播放
+function ensureAudio(){
+  if(audioCtx) return;
+  audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  analyser=audioCtx.createAnalyser();
+  analyser.fftSize=256; analyser.smoothingTimeConstant=0.75;
+  freqData=new Uint8Array(analyser.frequencyBinCount);
+  analyser.connect(audioCtx.destination);
+}
+function audioLevel(){
+  if(!analyser||!currentAudio||currentAudio.paused) return 0;
+  analyser.getByteFrequencyData(freqData);
+  let sum=0; for(const v of freqData) sum+=v;
+  return Math.min(1, sum/freqData.length/255*3.5);
+}
+// 清空队列并结算所有等待中的 Promise（点停止/新提问时调用）
+function drainQueue(){
+  const items=ttsQueue; ttsQueue=[];
+  for(const it of items){ if(it.resolve) it.resolve(false); }
+}
+function stopSpeaking(){
+  askSeq++; speakSeq++;                    // 同时中止流式回答和正在合成/播放的语音
+  drainQueue();
+  if(currentAudio){ currentAudio.pause(); currentAudio.currentTime=0; currentAudio=null; }
+  speaking=false; mouthTarget=0; stopBtn.disabled=true;
+  if(window.__resumeRecognition) window.__resumeRecognition();
+}
+// 把一句话加入朗读队列；返回该句播放结束的 Promise
+function speak(text, salute){
+  if(!voiceOn.checked) return Promise.resolve(false);
+  return new Promise(resolve=>{
+    ttsQueue.push({text, salute, resolve});
+    runTtsQueue();
+  });
+}
+async function runTtsQueue(){
+  if(ttsRunning) return;
+  ttsRunning=true;
+  if(window.__pauseRecognition) window.__pauseRecognition();  // 整段朗读期间只暂停一次识别
+  try{
+    while(ttsQueue.length){
+      const item=ttsQueue[0];
+      const ok=await playOne(item.text, item.salute, speakSeq);
+      if(ttsQueue[0]===item) ttsQueue.shift();
+      item.resolve(ok);
+    }
+  }finally{
+    ttsRunning=false;
+    if(!ttsQueue.length){
+      speaking=false; mouthTarget=0; stopBtn.disabled=true;
+      if(window.__resumeRecognition) window.__resumeRecognition();  // 全部读完才恢复免提
+    }
+  }
+}
+// TTS 预取 + 缓存：应声词和下一句都提前合成，朗读时不再有 0.7 秒空档
+const ttsCache=new Map(), ttsPending=new Map();
+function cacheAudio(text, blob){
+  if(ttsCache.size>=40){
+    for(const [k,v] of ttsCache){
+      if(!(currentAudio && currentAudio.src===v)){ URL.revokeObjectURL(v); ttsCache.delete(k); break; }
+    }
+  }
+  ttsCache.set(text, URL.createObjectURL(blob));
+}
+function fetchTTS(text){
+  const clean=text.replace(/[*_#`]/g,'');
+  if(ttsCache.has(clean)) return Promise.resolve(ttsCache.get(clean));
+  if(ttsPending.has(clean)) return ttsPending.get(clean);
+  const p=fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:clean})})
+    .then(resp=>{
+      if(!resp.ok) return resp.json().catch(()=>({})).then(d=>{ throw new Error(d.error||('HTTP '+resp.status)); });
+      return resp.blob();
+    })
+    .then(blob=>{ cacheAudio(clean, blob); ttsPending.delete(clean); return ttsCache.get(clean); })
+    .catch(e=>{ ttsPending.delete(clean); throw e; });
+  ttsPending.set(clean,p);
+  return p;
+}
+function preloadFiller(){ fetchTTS(CONFIG.filler).catch(()=>{}); }
+function prefetchTTS(text){ fetchTTS(text).catch(()=>{}); }
+// 合成并播放单句（通常已命中预取缓存）
+function playOne(text, salute, mySeq){
+  return new Promise(resolve=>{
+    let finished=false;
+    const finish=ok=>{ if(!finished){ finished=true; resolve(ok); } };
+    if(mySeq!==speakSeq || !text.trim()){ finish(false); return; }
+    const playUrl=url=>{
+      ensureAudio();
+      const go=()=>{
+        if(mySeq!==speakSeq || !ttsQueue.length){ finish(false); return; }
+        const audio=new Audio(url); currentAudio=audio;
+        audioCtx.createMediaElementSource(audio).connect(analyser);
+        const clear=()=>{ if(currentAudio===audio) currentAudio=null; };
+        audio.onplay=()=>{
+          audioUnlocked=true;
+          speaking=true; stopBtn.disabled=false; if(salute) startSalute();
+          if(window.__pauseRecognition) window.__pauseRecognition();
+        };
+        audio.onended=()=>{ clear(); speaking=false; mouthTarget=0; finish(true); };
+        audio.onerror=()=>{ clear(); speaking=false; mouthTarget=0; finish(false); };
+        audio.play().catch(e=>{
+          clear(); speaking=false;
+          if(!/interrupted by a call to pause|AbortError/i.test(e.message)){
+            console.error('语音播放失败:',e.message);
+            if(!audioUnlocked && /not allowed/i.test(e.message)){ pendingWelcome=text; soundGate.style.display='flex'; }
+          }
+          finish(false);
+        });
+      };
+      if(audioCtx.state==='suspended') audioCtx.resume().then(go, ()=>finish(false));
+      else go();
+    };
+    fetchTTS(text)
+      .then(url=>{
+        if(mySeq!==speakSeq || !ttsQueue.length){ finish(false); return; }
+        playUrl(url);
+      })
+      .catch(e=>{
+        console.error('语音合成失败:',e.message);
+        statusEl.textContent='语音合成失败：'+e.message;
+        finish(false);
+      });
+  });
+}
+preloadFiller();
+stopBtn.onclick=stopSpeaking;
+$('gateBtn').onclick=async()=>{
+  soundGate.style.display='none'; audioUnlocked=true;
+  ensureAudio(); if(audioCtx.state==='suspended') await audioCtx.resume();
+  if(pendingWelcome){ const t=pendingWelcome; pendingWelcome=null; await speak(t, true); }
+  // 授权这次点击后，自动开启语音唤醒，之后说「你好」即可，无需再点
+  if($('wakeOn').checked && window.__startListening && !listening){
+    window.__startListening();
+  }
+};
+async function playWelcome(){
+  if(welcomeDone) return;
+  welcomeDone=true;
+  addMsg('bot',CONFIG.welcome);
+  await new Promise(r=>setTimeout(r,600));
+  if(userActed) return;              // 用户已主动交互，不再播欢迎语，避免重叠
+  await speak(CONFIG.welcome, true); // 首次欢迎语：说话时同时敬礼打招呼
+}
+
+/* ---------- 动画循环 ---------- */
+const bubbleEl=$('bubble3d');
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=0.016;
+  clock+=dt;
+
+  // ---- 骨骼动画 ----
+  if(mixer){
+    mixer.update(dt);
+    // 单次动作播够时长后恢复静止
+    if(curAction){
+      curTimer-=dt;
+      if(curTimer<=0){
+        curAction.stop(); curAction=null; curTimer=0;
+        restoreRest();
+      }
+    }
+  }
+
+  // ---- 静止呼吸：无动作时用极轻微的整体起伏模拟呼吸 ----
+  if(!curAction){
+    const breath=Math.sin(clock*1.3);
+    avatarGroup.scale.y = 1 + breath*0.006;
+    avatarGroup.position.y = breath*0.008;
+  }else{
+    avatarGroup.scale.y = 1;
+    avatarGroup.position.y = 0;
+  }
+
+  // ---- 空闲拉伸：长时间无提问/无交互，播一次固定拉伸动作 ----
+  if(!speaking && !curAction){
+    idleElapsed+=dt;
+    if(idleElapsed>CONFIG.idleWait){ idleElapsed=0; playIdle(); }
+  }
+
+  // ---- 口型：说话时按音量驱动，停止后平滑合上（morph 与骨骼动画互不干扰）----
+  if(speaking){
+    const level=audioLevel();
+    visemeTimer+=dt;
+    if(level>0.06 && visemeTimer>0.12){ visemeTimer=0; visemePos++; }
+    mouthTarget=Math.min(1, level*1.7);
+  }else{
+    mouthTarget*=0.7; if(mouthTarget<0.02) mouthTarget=0;
+  }
+  applyMorphs(mouthTarget);
+
+  // ---- 气泡跟随角色头顶 ----
+  if(bubbleEl.style.display==='block'){
+    const v=new THREE.Vector3(0,1.55,0);
+    avatarGroup.localToWorld(v);
+    v.project(camera);
+    const w=$('left').clientWidth,h=$('left').clientHeight;
+    bubbleEl.style.left=((v.x*0.5+0.5)*w)+'px';
+    bubbleEl.style.top=((-v.y*0.5+0.5)*h)+'px';
+  }
+
+  controls.update(); renderer.render(scene,camera);
+}
+animate();
+
+/* ---------- 点击角色打招呼 ---------- */
+const raycaster=new THREE.Raycaster();
+const pointer=new THREE.Vector2();
+let lastGreet=0;
+
+// 恢复静止姿态：所有骨骼复位到绑定姿态
+function restoreRest(){
+  if(restPose) for(const [bone,q] of restPose) bone.quaternion.copy(q);
+}
+// 通用：播放一个单次动作，dur 秒后由动画循环切换下一段或恢复静止
+function playAction(action, dur){
+  if(!mixer||!action) return;
+  if(curAction && curAction!==action) curAction.stop();
+  curAction=action;
+  curTimer=dur;
+  action.reset().setLoop(THREE.LoopOnce,1).clampWhenFinished=true;
+  action.fadeIn(0.12).play();
+}
+// 敬礼（打招呼必做）：播敬礼后恢复静止
+function startSalute(){
+  playAction(saluteAction, CONFIG.saluteDur);
+}
+// 固定拉伸动作：空闲时播一次
+function playIdle(){
+  if(idleAction) playAction(idleAction, CONFIG.idleClipDur);
+}
+
+function showBubble(text){
+  bubbleEl.textContent=text;
+  bubbleEl.style.display='block';
+  clearTimeout(showBubble.timer);
+  showBubble.timer=setTimeout(()=>{ bubbleEl.style.display='none'; }, 3200);
+}
+
+function greet(){
+  const now=Date.now();
+  if(now-lastGreet<1500) return;        // 防止连点刷屏
+  lastGreet=now;
+  userActed=true; idleElapsed=0;       // 标记用户已交互，取消待播的欢迎语并重置发呆计时
+  const text=CONFIG.greetings[Math.floor(Math.random()*CONFIG.greetings.length)];
+  addMsg('bot',text);
+  showBubble(text);
+  speak(text, true);                    // 说话时播放模型自带的敬礼动画
+}
+
+function hitAvatar(clientX,clientY){
+  const r=$('cv').getBoundingClientRect();
+  pointer.x=((clientX-r.left)/r.width)*2-1;
+  pointer.y=-((clientY-r.top)/r.height)*2+1;
+  raycaster.setFromCamera(pointer,camera);
+  return raycaster.intersectObject(avatarGroup,true).length>0;
+}
+
+// 鼠标悬停变手型
+$('cv').addEventListener('pointermove',e=>{
+  $('cv').style.cursor=hitAvatar(e.clientX,e.clientY)?'pointer':'grab';
+});
+// 点击角色
+$('cv').addEventListener('click',e=>{
+  if(hitAvatar(e.clientX,e.clientY)) greet();
+});
+
+/* ---------- 对话 ---------- */
+function addMsg(role,text){
+  const div=document.createElement('div'); div.className='msg '+role;
+  const who=document.createElement('div'); who.className='who';
+  who.textContent=role==='user'?'你':'小叶';
+  const bubble=document.createElement('div'); bubble.className='bubble'; bubble.textContent=text;
+  div.append(who,bubble); chatEl.appendChild(div); chatEl.scrollTop=chatEl.scrollHeight;
+  return bubble;
+}
+// 流式接收回答：文本实时上屏，按句末标点切句后立刻排队朗读
+async function streamAnswer(resp, bubble, myAsk){
+  const reader=resp.body.getReader();
+  const decoder=new TextDecoder();
+  let buf='', full='', sentence='';
+  const promises=[];
+  function feed(t){
+    t=t.trim(); if(!t) return;
+    prefetchTTS(t);                   // 切出一句就立刻预合成，等轮到它时直接播
+    promises.push(speak(t, false));   // 普通问答不敬礼（打招呼/唤醒才敬礼）
+  }
+  try{
+    while(true){
+      const {value,done}=await reader.read();
+      if(done) break;
+      if(myAsk!==askSeq){ try{ reader.cancel(); }catch(e){} return false; }
+      buf+=decoder.decode(value,{stream:true});
+      let i;
+      while((i=buf.indexOf('\n'))>=0){
+        const line=buf.slice(0,i); buf=buf.slice(i+1);
+        if(!line.trim()) continue;
+        let obj; try{ obj=JSON.parse(line); }catch(e){ continue; }
+        if(obj.error) throw new Error(obj.error);
+        if(typeof obj.content!=='string') continue;
+        full+=obj.content;
+        bubble.textContent=full; chatEl.scrollTop=chatEl.scrollHeight;
+        sentence+=obj.content;
+        // 遇到句末标点就切一句；超过 45 字还没标点也强制切开，避免迟迟不发声
+        if(/[。！？!?；;\n]/.test(obj.content)){
+          const parts=sentence.split(/(?<=[。！？!?；;\n])/);
+          sentence=parts.pop();
+          for(const p of parts) feed(p);
+        }else if(sentence.length>=45){
+          feed(sentence); sentence='';
+        }
+      }
+    }
+    if(sentence.trim()) feed(sentence);
+    if(!full.trim()) throw new Error('这次没拿到回答，请再问一次');
+    await Promise.all(promises);       // 等所有句子读完再解锁
+    return myAsk===askSeq;
+  }finally{
+    try{ reader.releaseLock(); }catch(e){}
+  }
+}
+
+async function ask(question){
+  question=(question||qEl.value).trim(); if(!question) return;
+  userActed=true; idleElapsed=0;       // 标记用户已交互，取消待播的欢迎语并重置发呆计时
+  addMsg('user',question); qEl.value=''; sendBtn.disabled=true;
+  stopSpeaking();                      // 取消上一轮朗读/流式回答
+  const myAsk=++askSeq; busy=true;
+  if(ttsCache.has(CONFIG.filler)) speak(CONFIG.filler, false);  // 先应一声，消除等待空白
+  const pending=addMsg('bot','小叶正在思考…');
+  try{
+    let streamed=false;
+    try{
+      const resp=await fetch('/api/chat-stream',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({question})});
+      if(resp.ok && resp.body){
+        await streamAnswer(resp, pending, myAsk);
+        streamed=true;
+      }
+    }catch(e){
+      if(myAsk!==askSeq) return;
+      console.warn('流式接口失败，回退普通接口：',e.message);
+    }
+    if(myAsk!==askSeq) return;
+    if(!streamed){                     // 老版本后端兜底
+      const resp=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({question})});
+      const data=await resp.json();
+      if(!resp.ok||data.error) throw new Error(data.error||('HTTP '+resp.status));
+      pending.textContent=data.answer; chatEl.scrollTop=chatEl.scrollHeight;
+      await speak(data.answer);
+    }
+  }catch(e){
+    if(myAsk===askSeq) pending.textContent='出错了：'+e.message;
+  }finally{
+    if(myAsk===askSeq){ sendBtn.disabled=false; busy=false; }
+  }
+}
+sendBtn.onclick=()=>ask();
+qEl.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); ask(); } });
+
+/* ---------- 语音：免提唤醒 + 按住说话（Web Speech Recognition） ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition=null, listening=false;
+let wakeState='idle';           // idle 待唤醒 | active 对话中
+let wakeTimer=null;             // 对话超时计时器
+let wantListen=false;           // 是否希望保持监听（用于 onend 自动重启）
+let recognitionPaused=false;    // 小叶说话时临时暂停识别，避免自唤醒
+let busy=false;                 // 正在思考/朗读时忽略新识别，防止重复问答
+let lastAsked='', lastAskAt=0;  // 提问去重：相同内容短时间内不重复问
+
+function setMicIdle(){
+  micBtn.classList.remove('listening');
+  if(SR) micBtn.textContent = $('wakeOn').checked ? '👂 点击开启语音唤醒' : '🎤 按住说话';
+}
+function containsWake(text){
+  const t=text.replace(/[\s，。！？、,.!?~～]/g,'').toLowerCase();
+  return CONFIG.wakeWords.some(w=>t.includes(w.toLowerCase()));
+}
+function backToIdle(){
+  wakeState='idle';
+  clearTimeout(wakeTimer);
+  if($('wakeOn').checked) heardEl.textContent='说「'+CONFIG.wakeWords[0]+'」唤起小叶…';
+}
+function armWakeTimer(){
+  clearTimeout(wakeTimer);
+  wakeTimer=setTimeout(()=>{ if(wakeState==='active'){ backToIdle(); } }, CONFIG.activeTimeout);
+}
+
+if(SR){
+  recognition=new SR();
+  recognition.lang=CONFIG.lang;
+  recognition.interimResults=true;
+
+  recognition.onresult = e=>{
+    // 只处理本次新增的结果（连续识别会累积历史结果，从0遍历会重复处理旧句子）
+    let final='', interim='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      const t=e.results[i][0].transcript;
+      if(e.results[i].isFinal) final+=t; else interim+=t;
+    }
+    if(!final && !interim) return;
+    heardEl.textContent = final || interim;
+    if(busy) return;   // 思考/朗读期间忽略，避免重复触发
+
+    if($('wakeOn').checked){
+      // ---- 免提唤醒模式 ----
+      if(wakeState==='idle'){
+        if(final && containsWake(final)){
+          wakeState='active';
+          addMsg('bot', CONFIG.wakeReply);
+          showBubble(CONFIG.wakeReply);
+          speak(CONFIG.wakeReply, true);   // 唤醒时敬礼
+          armWakeTimer();
+          heardEl.textContent='小叶在听，请说…';
+        }
+      }else if(wakeState==='active'){
+        if(final){
+          let q=final.trim().replace(/^[\s，。！？、,.!?~～]*(你好|小叶|哈喽|hi)[\s，。！？、,.!?~～]*/i,'').trim();
+          if(q) fireQuestion(q);   // 带去重的问题提交
+        }
+      }
+    }else{
+      // ---- 按住说话模式 ----
+      if(final){ stopListening(); fireQuestion(final); }
+    }
+  };
+
+  // 提交问题（去重 + 忙碌锁）
+  function fireQuestion(q){
+    q=q.trim(); if(!q) return;
+    const now=Date.now();
+    if(q===lastAsked && now-lastAskAt<3000) return;   // 3秒内相同问题不重复
+    if(busy) return;
+    lastAsked=q; lastAskAt=now;
+    busy=true;
+    ask(q);
+  }
+  recognition.onerror = e=>{
+    listening=false;
+    if(e.error==='no-speech' && $('wakeOn').checked) return;  // 免提下没声音正常，等 onend 重启
+    heardEl.textContent = e.error==='not-allowed' ? '麦克风权限被拒绝，请在浏览器地址栏允许' : ('识别失败：'+e.error);
+    setMicIdle();
+  };
+  recognition.onend = ()=>{
+    listening=false;
+    // 免提模式下自动重启，保持持续监听；小叶说话/临时暂停时不重启
+    if(wantListen && $('wakeOn').checked && !recognitionPaused && !speaking){
+      setTimeout(()=>{ if(wantListen && $('wakeOn').checked && !recognitionPaused && !speaking) startListening(); }, 300);
+    }else{
+      setMicIdle();
+    }
+  };
+
+  function startListening(){
+    if(listening || recognitionPaused) return;
+    wantListen=$('wakeOn').checked;   // 免提=持续，按住=单次
+    recognition.continuous=wantListen;
+    if(speaking) stopSpeaking();
+    heardEl.textContent = wantListen ? (wakeState==='idle'?'说「'+CONFIG.wakeWords[0]+'」唤起小叶…':'小叶在听，请说…') : '正在聆听…';
+    try{
+      recognition.start(); listening=true;
+      micBtn.classList.add('listening');
+      micBtn.textContent = wantListen ? (wakeState==='idle'?'👂 等待唤醒…':'🔴 语音对话中') : '🔴 松开结束';
+    }catch(e){ heardEl.textContent='无法启动识别'; }
+  }
+  function stopListening(keepWake){
+    wantListen=!!keepWake;
+    if(!listening) return;
+    try{ recognition.stop(); }catch(e){}
+    listening=false;
+    if(!keepWake) setMicIdle();
+  }
+  // 暴露给 TTS 播放流程：说话时暂停识别，说完恢复
+  window.__pauseRecognition=()=>{
+    if(!$('wakeOn').checked || !wantListen) return;   // 只在免提持续监听时需要暂停
+    recognitionPaused=true;
+    if(listening){ try{ recognition.stop(); }catch(e){} listening=false; }
+  };
+  window.__resumeRecognition=()=>{
+    if(!$('wakeOn').checked || !wantListen) return;
+    recognitionPaused=false;
+    if(!listening && !speaking) setTimeout(startListening, 200);
+  };
+
+  // 免提：点击开/关持续监听
+  micBtn.addEventListener('click', ()=>{
+    if(!$('wakeOn').checked) return;    // 按住模式下 click 不处理
+    if(wantListen && listening){ stopListening(false); heardEl.textContent='语音唤醒已关闭'; }
+    else { startListening(); }
+  });
+  // 按住说话：免提关闭时可用
+  micBtn.addEventListener('mousedown', ()=>{ if(!$('wakeOn').checked) startListening(); });
+  micBtn.addEventListener('mouseup', ()=>{ if(!$('wakeOn').checked && listening) stopListening(false); });
+  micBtn.addEventListener('mouseleave', ()=>{ if(!$('wakeOn').checked && listening) stopListening(false); });
+  micBtn.addEventListener('touchstart', e=>{ if(!$('wakeOn').checked){ e.preventDefault(); startListening(); } },{passive:false});
+  micBtn.addEventListener('touchend', e=>{ if(!$('wakeOn').checked){ e.preventDefault(); if(listening) stopListening(false); } },{passive:false});
+
+  // 切换模式：重置状态
+  $('wakeOn').addEventListener('change', ()=>{
+    stopListening(false);
+    wakeState='idle'; clearTimeout(wakeTimer);
+    heardEl.textContent = $('wakeOn').checked ? '点击上方按钮开启语音唤醒' : '按住下方按钮说话';
+    setMicIdle();
+  });
+}else{
+  micBtn.textContent='🎤 当前浏览器不支持语音识别';
+  micBtn.disabled=true;
+  $('wakeOn').disabled=true;
+  heardEl.textContent='请用下方文字输入框提问';
+}
+</script>
+</body>
+</html>
